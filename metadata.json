@@ -1,0 +1,10 @@
+{
+  "name": "D-mon AI: Your Virtual Gaming & Life Companion",
+  "description": "A high-performance real-time AI assistant powered by Gemini Live API, capable of seeing your screen/webcam, assisting in gaming, work, and personal life with a custom personality.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture",
+    "geolocation"
+  ]
+}
