@@ -48,13 +48,35 @@ const App: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const userAnalyserRef = useRef<AnalyserNode | null>(null);
 
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sessionRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const frameIntervalRef = useRef<number | null>(null);
+  
+  // Ref crítico para el estado de muteo (evita el problema de clausuras en onaudioprocess)
+  const isMutedRef = useRef(state.isMuted);
+
+  useEffect(() => {
+    isMutedRef.current = state.isMuted;
+  }, [state.isMuted]);
+
+  // Efecto para vincular el stream al videoRef una vez que el componente se renderiza
+  useEffect(() => {
+    if (videoRef.current && streamRef.current && (state.isStreamingScreen || state.isStreamingWebcam)) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(err => console.error("Video play failed:", err));
+      }
+    }
+  }, [state.isStreamingScreen, state.isStreamingWebcam]);
+
   useEffect(() => {
     localStorage.setItem('dmon_user_name', state.userName);
     localStorage.setItem('dmon_ai_name', state.aiName);
     localStorage.setItem('dmon_lang', state.language);
   }, [state.userName, state.aiName, state.language]);
 
-  // Sincronización automática de memoria con el almacenamiento local
   useEffect(() => {
     localStorage.setItem('dmon_neural_history', JSON.stringify(transcriptions));
   }, [transcriptions]);
@@ -117,40 +139,24 @@ const App: React.FC = () => {
 
   const clearMemory = () => {
     const t = TRANSLATIONS[state.language];
-    // 1. Limpiamos el estado inmediatamente (esto dispara el useEffect de persistencia)
     setTranscriptions([]);
-    // 2. Limpieza forzada de localStorage
     localStorage.removeItem('dmon_neural_history');
-    // 3. Feedback visual retardado para que el usuario lo vea en el log limpio
     setTimeout(() => {
        addTranscription(t.system, state.language === 'es' ? "NÚCLEO DE MEMORIA FORMATEADO. REINICIO COMPLETADO." : "MEMORY CORE FORMATTED. RESET COMPLETE.");
     }, 50);
-
     if (state.isConnected && sessionRef.current) {
       sessionRef.current.sendRealtimeInput({ text: "[SYSTEM: User cleared your memory. Forget everything.]" });
     }
   };
 
-  const tools: FunctionDeclaration[] = [{
-    name: 'set_timer',
-    parameters: {
-      type: Type.OBJECT,
-      properties: { seconds: { type: Type.NUMBER }, label: { type: Type.STRING } },
-      required: ['seconds', 'label']
-    }
-  }];
-
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sessionRef = useRef<any>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const frameIntervalRef = useRef<number | null>(null);
-
   const handleConnect = async () => {
     const t = TRANSLATIONS[state.language];
     if (state.isConnected) {
       if (sessionRef.current) sessionRef.current.close();
-      if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
       setState(prev => ({ ...prev, isConnected: false, isStreamingScreen: false, isStreamingWebcam: false }));
       addTranscription(t.system, "Neural Link Offline.");
       return;
@@ -176,7 +182,7 @@ const App: React.FC = () => {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.voice as any } } },
           systemInstruction: `Identity: ${state.aiName}. User: ${state.userName}. ${historyCtx} Tone: ${persona}`,
-          tools: [{ functionDeclarations: tools }, { googleSearch: {} }],
+          tools: [{ functionDeclarations: [{ name: 'set_timer', parameters: { type: Type.OBJECT, properties: { seconds: { type: Type.NUMBER }, label: { type: Type.STRING } }, required: ['seconds', 'label'] } }] }, { googleSearch: {} }],
           outputAudioTranscription: {},
           inputAudioTranscription: {}
         },
@@ -186,8 +192,17 @@ const App: React.FC = () => {
             addTranscription(t.system, "Neural Link Established.");
             const processor = inputAudioContext!.createScriptProcessor(4096, 1, 1);
             inputAudioContext!.createMediaStreamSource(micStream).connect(processor);
+            
+            // USAR EL REF PARA VERIFICAR EL MUTE EN TIEMPO REAL
             processor.onaudioprocess = (e) => {
-              if (!state.isMuted) sessionPromise.then(s => s.sendRealtimeInput({ media: { data: createPcmBlob(e.inputBuffer.getChannelData(0)), mimeType: 'audio/pcm;rate=16000' } }));
+              if (!isMutedRef.current) {
+                sessionPromise.then(s => s.sendRealtimeInput({ 
+                  media: { 
+                    data: createPcmBlob(e.inputBuffer.getChannelData(0)), 
+                    mimeType: 'audio/pcm;rate=16000' 
+                  } 
+                }));
+              }
             };
             processor.connect(inputAudioContext!.destination);
           },
@@ -228,29 +243,46 @@ const App: React.FC = () => {
     if (!force && ((type === 'screen' && state.isStreamingScreen) || (type === 'camera' && state.isStreamingWebcam))) {
       if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
       setState(p => ({ ...p, isStreamingScreen: false, isStreamingWebcam: false }));
       return;
     }
     try {
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-      const stream = type === 'screen' ? await navigator.mediaDevices.getDisplayMedia({ video: true }) : await navigator.mediaDevices.getUserMedia({ video: { facingMode: overrideMode || state.facingMode } });
+      
+      const stream = type === 'screen' 
+        ? await navigator.mediaDevices.getDisplayMedia({ video: true }) 
+        : await navigator.mediaDevices.getUserMedia({ video: { facingMode: overrideMode || state.facingMode } });
+      
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      
+      // Detener el stream si el usuario cancela el diálogo nativo de compartir pantalla
+      stream.getVideoTracks()[0].onended = () => {
+        if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+        setState(p => ({ ...p, isStreamingScreen: false, isStreamingWebcam: false }));
+        streamRef.current = null;
+      };
+
       setState(p => ({ ...p, isStreamingScreen: type === 'screen', isStreamingWebcam: type === 'camera' }));
+
       frameIntervalRef.current = window.setInterval(() => {
-        if (!canvasRef.current || !videoRef.current || !sessionRef.current) return;
+        if (!canvasRef.current || !videoRef.current || !sessionRef.current || videoRef.current.readyState < 2) return;
         const ctx = canvasRef.current.getContext('2d');
         canvasRef.current.width = 640; canvasRef.current.height = 360;
         ctx?.drawImage(videoRef.current, 0, 0, 640, 360);
         canvasRef.current.toBlob(b => {
-          if (b) {
+          if (b && sessionRef.current) {
             const r = new FileReader();
             r.onloadend = () => sessionRef.current.sendRealtimeInput({ media: { data: (r.result as string).split(',')[1], mimeType: 'image/jpeg' } });
             r.readAsDataURL(b);
           }
         }, 'image/jpeg', 0.5);
       }, 1500);
-    } catch (e) {}
+    } catch (e) {
+      console.error("Stream initialization failed:", e);
+      setState(p => ({ ...p, isStreamingScreen: false, isStreamingWebcam: false }));
+    }
   };
 
   return (
