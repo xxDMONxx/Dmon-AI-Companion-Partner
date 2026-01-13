@@ -35,6 +35,7 @@ export const TRANSLATIONS: Record<Language, any> = {
     opticStreamActive: "Optic Stream Active",
     shareScreen: "Share Screen",
     toggleWebcam: "Toggle Webcam",
+    switchCamera: "Switch Camera",
     muteMic: "Mute Microphone",
     unmuteMic: "Unmute Microphone",
     terminateLink: "TERMINATE LINK",
@@ -44,7 +45,16 @@ export const TRANSLATIONS: Record<Language, any> = {
     user: "User",
     locationAccess: "Requesting Location...",
     locationError: "Location Access Denied",
-    langToggle: "Español"
+    langToggle: "Español",
+    notSupported: "Feature not supported on this browser/device",
+    personalities: {
+      [PersonalityType.FRIENDLY]: 'Friendly',
+      [PersonalityType.PROFESSIONAL]: 'Professional',
+      [PersonalityType.GAMER]: 'Gamer/Competitive',
+      [PersonalityType.SARCASTIC]: 'Witty/Sarcastic',
+      [PersonalityType.ZEN]: 'Zen/Calm',
+      [PersonalityType.CUSTOM]: 'Custom Persona'
+    }
   },
   es: {
     userProfile: "Perfil de Usuario",
@@ -62,6 +72,7 @@ export const TRANSLATIONS: Record<Language, any> = {
     opticStreamActive: "Transmisión Óptica Activa",
     shareScreen: "Compartir Pantalla",
     toggleWebcam: "Activar Webcam",
+    switchCamera: "Cambiar Cámara",
     muteMic: "Silenciar Micrófono",
     unmuteMic: "Activar Micrófono",
     terminateLink: "TERMINAR ENLACE",
@@ -71,6 +82,15 @@ export const TRANSLATIONS: Record<Language, any> = {
     user: "Usuario",
     locationAccess: "Solicitando Ubicación...",
     locationError: "Acceso a Ubicación Denegado",
-    langToggle: "English"
+    langToggle: "English",
+    notSupported: "Función no compatible en este navegador/dispositivo",
+    personalities: {
+      [PersonalityType.FRIENDLY]: 'Amigable',
+      [PersonalityType.PROFESSIONAL]: 'Profesional',
+      [PersonalityType.GAMER]: 'Gamer/Competitivo',
+      [PersonalityType.SARCASTIC]: 'Ingenioso/Sarcástico',
+      [PersonalityType.ZEN]: 'Zen/Calmado',
+      [PersonalityType.CUSTOM]: 'Persona Personalizada'
+    }
   }
 };

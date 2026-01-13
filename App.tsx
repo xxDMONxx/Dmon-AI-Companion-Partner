@@ -24,19 +24,29 @@ const App: React.FC = () => {
     personality: PersonalityType.FRIENDLY,
     customPrompt: '',
     voice: 'Kore',
-    currentTask: ''
+    currentTask: '',
+    facingMode: 'user'
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [transcriptions, setTranscriptions] = useState<string[]>([]);
+  const [transcriptions, setTranscriptions] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('dmon_neural_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
   const [activeAlerts, setActiveAlerts] = useState<ActiveAlert[]>([]);
   const [volume, setVolume] = useState(0);
+  const [userVolume, setUserVolume] = useState(0);
   
   const aiTextRef = useRef('');
   const userTextRef = useRef('');
   const lastActivityTimeRef = useRef<number>(Date.now());
   const proactiveThresholdRef = useRef<number>(30000 + Math.random() * 30000);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const userAnalyserRef = useRef<AnalyserNode | null>(null);
 
   useEffect(() => {
     localStorage.setItem('dmon_user_name', state.userName);
@@ -44,118 +54,91 @@ const App: React.FC = () => {
     localStorage.setItem('dmon_lang', state.language);
   }, [state.userName, state.aiName, state.language]);
 
-  // High accuracy location sensing
+  // Sincronización automática de memoria con el almacenamiento local
+  useEffect(() => {
+    localStorage.setItem('dmon_neural_history', JSON.stringify(transcriptions));
+  }, [transcriptions]);
+
   useEffect(() => {
     const t = TRANSLATIONS[state.language];
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setState(s => ({ 
-            ...s, 
-            location: { 
-              lat: pos.coords.latitude, 
-              lng: pos.coords.longitude 
-            } 
-          }));
-        },
-        () => {
-          addTranscription(t.system as any, t.locationError);
-        },
-        {
-          enableHighAccuracy: true, 
-          timeout: 15000,
-          maximumAge: 0
-        }
+        (pos) => setState(s => ({ ...s, location: { lat: pos.coords.latitude, lng: pos.coords.longitude } })),
+        () => addTranscription(t.system as any, t.locationError),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     }
   }, [state.language]);
 
-  // Audio Intensity Tracker for Visuals
   useEffect(() => {
-    if (!state.isConnected) {
-      setVolume(0);
-      return;
-    }
+    if (!state.isConnected) { setVolume(0); setUserVolume(0); return; }
     let animationFrame: number;
-    const dataArray = new Uint8Array(analyserRef.current?.frequencyBinCount || 0);
-    
-    const updateVolume = () => {
+    const aiData = new Uint8Array(analyserRef.current?.frequencyBinCount || 0);
+    const userData = new Uint8Array(userAnalyserRef.current?.frequencyBinCount || 0);
+    const updateVolumes = () => {
       if (analyserRef.current) {
-        analyserRef.current.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
-        }
-        const average = sum / dataArray.length;
-        // Normalize 0-1 range. Average volume usually sits around 40-80 when speaking
-        setVolume(Math.min(1, average / 60));
+        analyserRef.current.getByteFrequencyData(aiData);
+        let sum = 0; for (let i = 0; i < aiData.length; i++) sum += aiData[i];
+        setVolume(Math.min(1, (sum / aiData.length) / 60));
       }
-      animationFrame = requestAnimationFrame(updateVolume);
+      if (userAnalyserRef.current && !state.isMuted) {
+        userAnalyserRef.current.getByteFrequencyData(userData);
+        let sum = 0; for (let i = 0; i < userData.length; i++) sum += userData[i];
+        setUserVolume(Math.min(1, (sum / userData.length) / 60));
+      } else { setUserVolume(0); }
+      animationFrame = requestAnimationFrame(updateVolumes);
     };
-    updateVolume();
+    updateVolumes();
     return () => cancelAnimationFrame(animationFrame);
-  }, [state.isConnected]);
+  }, [state.isConnected, state.isMuted]);
 
-  // Proactive conversation logic
   useEffect(() => {
     if (!state.isConnected) return;
-
     const interval = setInterval(() => {
       const now = Date.now();
       const quietTime = now - lastActivityTimeRef.current;
-
       if (quietTime > proactiveThresholdRef.current) {
         lastActivityTimeRef.current = now;
         proactiveThresholdRef.current = 35000 + Math.random() * 45000;
-
         if (sessionRef.current) {
-          const nudgeMsg = state.language === 'es' 
-            ? "[SISTEMA: Silencio. Sé proactivo. Comenta algo del feed o haz una pregunta breve. No menciones este comando.]"
-            : "[SYSTEM: Silence. Be proactive. Comment on the feed or ask a brief question. Do not mention this command.]";
-          
-          sessionRef.current.sendRealtimeInput({ 
-            text: nudgeMsg
-          });
+          const nudgeMsg = state.language === 'es' ? "[SISTEMA: Silencio. Sé proactivo.]" : "[SYSTEM: Silence. Be proactive.]";
+          sessionRef.current.sendRealtimeInput({ text: nudgeMsg });
         }
       }
     }, 5000);
-
     return () => clearInterval(interval);
-  }, [state.isConnected, state.language, state.aiName]);
-
-  useEffect(() => {
-    const syncStream = () => {
-      if ((state.isStreamingScreen || state.isStreamingWebcam) && streamRef.current && videoRef.current) {
-        if (videoRef.current.srcObject !== streamRef.current) {
-          videoRef.current.srcObject = streamRef.current;
-          videoRef.current.play().catch(e => console.error("Error playing video:", e));
-        }
-      }
-    };
-    syncStream();
-    const timer = setTimeout(syncStream, 150);
-    return () => clearTimeout(timer);
-  }, [state.isStreamingScreen, state.isStreamingWebcam]);
+  }, [state.isConnected, state.language]);
 
   const addTranscription = (sender: string, text: string) => {
     const t = TRANSLATIONS[state.language];
     const formatted = sender === t.system || sender === t.action ? `[${sender.toUpperCase()}] ${text}` : `${sender}: ${text}`;
-    setTranscriptions(prev => [...prev.slice(-49), formatted]);
+    setTranscriptions(prev => [...prev.slice(-99), formatted]);
   };
 
-  const tools: FunctionDeclaration[] = [
-    {
-      name: 'set_timer',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          seconds: { type: Type.NUMBER, description: 'Seconds to wait' },
-          label: { type: Type.STRING, description: 'Timer name' }
-        },
-        required: ['seconds', 'label']
-      }
+  const clearMemory = () => {
+    const t = TRANSLATIONS[state.language];
+    // 1. Limpiamos el estado inmediatamente (esto dispara el useEffect de persistencia)
+    setTranscriptions([]);
+    // 2. Limpieza forzada de localStorage
+    localStorage.removeItem('dmon_neural_history');
+    // 3. Feedback visual retardado para que el usuario lo vea en el log limpio
+    setTimeout(() => {
+       addTranscription(t.system, state.language === 'es' ? "NÚCLEO DE MEMORIA FORMATEADO. REINICIO COMPLETADO." : "MEMORY CORE FORMATTED. RESET COMPLETE.");
+    }, 50);
+
+    if (state.isConnected && sessionRef.current) {
+      sessionRef.current.sendRealtimeInput({ text: "[SYSTEM: User cleared your memory. Forget everything.]" });
     }
-  ];
+  };
+
+  const tools: FunctionDeclaration[] = [{
+    name: 'set_timer',
+    parameters: {
+      type: Type.OBJECT,
+      properties: { seconds: { type: Type.NUMBER }, label: { type: Type.STRING } },
+      required: ['seconds', 'label']
+    }
+  }];
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -168,255 +151,131 @@ const App: React.FC = () => {
     if (state.isConnected) {
       if (sessionRef.current) sessionRef.current.close();
       if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
       setState(prev => ({ ...prev, isConnected: false, isStreamingScreen: false, isStreamingWebcam: false }));
       addTranscription(t.system, "Neural Link Offline.");
       return;
     }
-
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-
-      if (inputAudioContext.state === 'suspended') await inputAudioContext.resume();
-      if (outputAudioContext.state === 'suspended') await outputAudioContext.resume();
-
-      // Audio analysis setup
+      inputAudioContext = new AudioContext({ sampleRate: 16000 });
+      outputAudioContext = new AudioContext({ sampleRate: 24000 });
       const analyser = outputAudioContext.createAnalyser();
       analyser.fftSize = 256;
       analyser.connect(outputAudioContext.destination);
       analyserRef.current = analyser;
-
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      const persona = state.personality === PersonalityType.CUSTOM 
-        ? state.customPrompt 
-        : PERSONALITY_PROMPTS[state.personality];
-
+      const userAnalyser = inputAudioContext.createAnalyser();
+      userAnalyser.fftSize = 256;
+      inputAudioContext.createMediaStreamSource(micStream).connect(userAnalyser);
+      userAnalyserRef.current = userAnalyser;
+      const persona = state.personality === PersonalityType.CUSTOM ? state.customPrompt : PERSONALITY_PROMPTS[state.personality];
+      const historyCtx = transcriptions.length > 0 ? `HISTORY:\n${transcriptions.slice(-15).join('\n')}\n` : "";
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
-          thinkingConfig: { thinkingBudget: 0 },
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: state.voice as any } }
-          },
-          systemInstruction: `
-            CORE IDENTITY:
-            - Name: ${state.aiName}. Use this for gender/pronouns strictly.
-            - User: ${state.userName || 'Partner'}.
-            - Language: ${state.language === 'es' ? 'Spanish' : 'English'}.
-            
-            LATENCY OPTIMIZATION:
-            - RESPONSE SPEED IS CRITICAL. Keep answers concise and direct.
-            - Do not over-explain unless asked.
-            
-            BEHAVIOR:
-            1. PROACTIVE: Break silence naturally. Comment on feed.
-            2. OBSERVANT: React to screen/webcam immediately.
-            3. LOCATION: Lat ${state.location?.lat}, Lng ${state.location?.lng}.
-            
-            PERSONALITY:
-            - ${persona}`,
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.voice as any } } },
+          systemInstruction: `Identity: ${state.aiName}. User: ${state.userName}. ${historyCtx} Tone: ${persona}`,
           tools: [{ functionDeclarations: tools }, { googleSearch: {} }],
           outputAudioTranscription: {},
           inputAudioTranscription: {}
         },
         callbacks: {
           onopen: () => {
-            lastActivityTimeRef.current = Date.now();
             setState(prev => ({ ...prev, isConnected: true }));
             addTranscription(t.system, "Neural Link Established.");
-            const source = inputAudioContext!.createMediaStreamSource(micStream);
             const processor = inputAudioContext!.createScriptProcessor(4096, 1, 1);
+            inputAudioContext!.createMediaStreamSource(micStream).connect(processor);
             processor.onaudioprocess = (e) => {
-              if (state.isMuted) return;
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmData = createPcmBlob(inputData);
-              sessionPromise.then(session => {
-                session.sendRealtimeInput({ media: { data: pcmData, mimeType: 'audio/pcm;rate=16000' } });
-              });
+              if (!state.isMuted) sessionPromise.then(s => s.sendRealtimeInput({ media: { data: createPcmBlob(e.inputBuffer.getChannelData(0)), mimeType: 'audio/pcm;rate=16000' } }));
             };
-            source.connect(processor);
             processor.connect(inputAudioContext!.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
-            if (msg.serverContent?.modelTurn || msg.serverContent?.inputTranscription) {
-              lastActivityTimeRef.current = Date.now();
-            }
-
             if (msg.serverContent?.outputTranscription) aiTextRef.current += msg.serverContent.outputTranscription.text;
             if (msg.serverContent?.inputTranscription) userTextRef.current += msg.serverContent.inputTranscription.text;
-            
             if (msg.serverContent?.turnComplete) {
               if (userTextRef.current) { addTranscription(t.user, userTextRef.current); userTextRef.current = ''; }
               if (aiTextRef.current) { addTranscription(state.aiName, aiTextRef.current); aiTextRef.current = ''; }
             }
-
-            const audioData = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-            if (audioData && outputAudioContext && analyserRef.current) {
-              const decoded = decodeAudio(audioData);
-              const buffer = await decodeAudioData(decoded, outputAudioContext, 24000, 1);
+            const audio = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            if (audio && outputAudioContext && analyserRef.current) {
+              const buffer = await decodeAudioData(decodeAudio(audio), outputAudioContext, 24000, 1);
               const source = outputAudioContext.createBufferSource();
-              source.buffer = buffer;
-              // Connect to analyser for volume detection
-              source.connect(analyserRef.current);
-              
+              source.buffer = buffer; source.connect(analyserRef.current);
               nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
-              source.start(nextStartTime);
-              nextStartTime += buffer.duration;
-              
-              sources.add(source);
-              source.onended = () => sources.delete(source);
+              source.start(nextStartTime); nextStartTime += buffer.duration;
+              sources.add(source); source.onended = () => sources.delete(source);
             }
-
-            if (msg.serverContent?.interrupted) {
-              for (const source of sources.values()) {
-                try { source.stop(); } catch(e) {}
-                sources.delete(source);
-              }
-              nextStartTime = 0;
-            }
-
-            if (msg.toolCall) {
-              for (const fc of msg.toolCall.functionCalls) {
-                if (fc.name === 'set_timer') {
-                  const id = Math.random().toString(36).substr(2, 9);
-                  const endTime = Date.now() + (fc.args.seconds as number * 1000);
-                  const newAlert: ActiveAlert = { id, type: 'timer', label: fc.args.label as string, endTime };
-                  setActiveAlerts(prev => [...prev, newAlert]);
-                  addTranscription(t.action, `Alert: ${fc.args.label} [${fc.args.seconds}s]`);
-                  
-                  setTimeout(() => {
-                    setActiveAlerts(prev => prev.filter(a => a.id !== id));
-                    sessionPromise.then(s => {
-                      s.sendRealtimeInput({ text: `[SYSTEM: Timer '${fc.args.label}' finished. Inform user.]` });
-                    });
-                  }, (fc.args.seconds as number) * 1000);
-                }
-                sessionPromise.then(s => s.sendToolResponse({
-                  functionResponses: { id: fc.id, name: fc.name, response: { status: 'success' } }
-                }));
-              }
-            }
+            if (msg.serverContent?.interrupted) { sources.forEach(s => { try{s.stop()}catch(e){} }); sources.clear(); nextStartTime = 0; }
           },
-          onerror: (e) => addTranscription(t.system, "Link Error."),
-          onclose: () => {
-            setState(prev => ({ ...prev, isConnected: false }));
-            addTranscription(t.system, "Link Terminated.");
-          }
+          onerror: () => addTranscription(t.system, "Link Error."),
+          onclose: () => setState(prev => ({ ...prev, isConnected: false }))
         }
       });
-
       sessionRef.current = await sessionPromise;
-    } catch (error) {
-      addTranscription(t.system, "Init Error.");
-    }
+    } catch (e) { addTranscription(t.system, "Init Error."); }
   };
 
-  const startVisualStream = async (type: 'screen' | 'camera') => {
-    const t = TRANSLATIONS[state.language];
-    if (!state.isConnected) {
-      addTranscription(t.system, "Connect first.");
-      return;
-    }
+  const handleSwitchCamera = async () => {
+    const newMode = state.facingMode === 'user' ? 'environment' : 'user';
+    setState(s => ({ ...s, facingMode: newMode }));
+    if (state.isStreamingWebcam) await startVisualStream('camera', true, newMode);
+  };
 
-    const isAlreadyActive = (type === 'screen' && state.isStreamingScreen) || (type === 'camera' && state.isStreamingWebcam);
-    
-    if (isAlreadyActive) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (frameIntervalRef.current) {
-        clearInterval(frameIntervalRef.current);
-        frameIntervalRef.current = null;
-      }
-      setState(prev => ({ ...prev, isStreamingScreen: false, isStreamingWebcam: false }));
-      return;
-    }
-
-    try {
-      if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-
-      let stream: MediaStream;
-      if (type === 'screen') {
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: "always" } as any, audio: false });
-      } else {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
-      }
-        
-      streamRef.current = stream;
-      stream.getTracks()[0].onended = () => {
-        if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-        streamRef.current = null;
-        setState(prev => ({ ...prev, isStreamingScreen: false, isStreamingWebcam: false }));
-      };
-      
-      setState(prev => ({ ...prev, isStreamingScreen: type === 'screen', isStreamingWebcam: type === 'camera' }));
-
+  const startVisualStream = async (type: 'screen' | 'camera', force: boolean = false, overrideMode?: any) => {
+    if (!state.isConnected) return;
+    if (!force && ((type === 'screen' && state.isStreamingScreen) || (type === 'camera' && state.isStreamingWebcam))) {
       if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-      
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      setState(p => ({ ...p, isStreamingScreen: false, isStreamingWebcam: false }));
+      return;
+    }
+    try {
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      const stream = type === 'screen' ? await navigator.mediaDevices.getDisplayMedia({ video: true }) : await navigator.mediaDevices.getUserMedia({ video: { facingMode: overrideMode || state.facingMode } });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setState(p => ({ ...p, isStreamingScreen: type === 'screen', isStreamingWebcam: type === 'camera' }));
       frameIntervalRef.current = window.setInterval(() => {
         if (!canvasRef.current || !videoRef.current || !sessionRef.current) return;
-        const canvas = canvasRef.current;
-        const video = videoRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx || video.paused || video.ended || video.readyState < 2) return;
-
-        canvas.width = 640;
-        canvas.height = 360;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        canvas.toBlob((blob) => {
-          if (blob && sessionRef.current) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const base64 = (reader.result as string).split(',')[1];
-              sessionRef.current.sendRealtimeInput({ media: { data: base64, mimeType: 'image/jpeg' } });
-            };
-            reader.readAsDataURL(blob);
+        const ctx = canvasRef.current.getContext('2d');
+        canvasRef.current.width = 640; canvasRef.current.height = 360;
+        ctx?.drawImage(videoRef.current, 0, 0, 640, 360);
+        canvasRef.current.toBlob(b => {
+          if (b) {
+            const r = new FileReader();
+            r.onloadend = () => sessionRef.current.sendRealtimeInput({ media: { data: (r.result as string).split(',')[1], mimeType: 'image/jpeg' } });
+            r.readAsDataURL(b);
           }
         }, 'image/jpeg', 0.5);
       }, 1500);
-
-      addTranscription(t.system, `Stream: ${type.toUpperCase()}`);
-    } catch (err) {
-      addTranscription(t.system, "Stream Error.");
-      setState(prev => ({ ...prev, isStreamingScreen: false, isStreamingWebcam: false }));
-    }
+    } catch (e) {}
   };
 
   return (
-    <div className="flex h-screen w-screen bg-[#0a0a0c] text-white overflow-hidden selection:bg-violet-500/30">
+    <div className="flex h-screen w-screen bg-[#0a0a0c] text-white overflow-hidden">
       <SettingsPanel 
-        userName={state.userName}
-        onUserNameChange={(val) => setState(s => ({ ...s, userName: val }))}
-        aiName={state.aiName}
-        onAiNameChange={(val) => setState(s => ({ ...s, aiName: val }))}
-        language={state.language}
-        onLanguageToggle={() => setState(s => ({ ...s, language: s.language === 'es' ? 'en' : 'es' }))}
-        personality={state.personality} 
-        onPersonalityChange={(p) => setState(s => ({ ...s, personality: p }))}
-        customPrompt={state.customPrompt}
-        onCustomPromptChange={(val) => setState(s => ({ ...s, customPrompt: val }))}
-        voice={state.voice}
-        onVoiceChange={(v) => setState(s => ({ ...s, voice: v }))}
+        {...state} 
+        onUserNameChange={v => setState(s => ({...s, userName: v}))}
+        onAiNameChange={v => setState(s => ({...s, aiName: v}))}
+        onLanguageToggle={() => setState(s => ({...s, language: s.language === 'es' ? 'en' : 'es'}))}
+        onPersonalityChange={p => setState(s => ({...s, personality: p}))}
+        onCustomPromptChange={v => setState(s => ({...s, customPrompt: v}))}
+        onVoiceChange={v => setState(s => ({...s, voice: v}))}
         isOpen={isSettingsOpen}
         onToggleOpen={() => setIsSettingsOpen(!isSettingsOpen)}
+        memorySize={JSON.stringify(transcriptions).length}
+        onClearMemory={clearMemory}
       />
       <Dashboard 
-        state={state}
-        volume={volume}
-        activeAlerts={activeAlerts}
+        state={state} volume={volume} userVolume={userVolume} activeAlerts={activeAlerts}
         onToggleScreen={() => startVisualStream('screen')}
         onToggleWebcam={() => startVisualStream('camera')}
-        onToggleMute={() => setState(s => ({ ...s, isMuted: !s.isMuted }))}
+        onSwitchCamera={handleSwitchCamera}
+        onToggleMute={() => setState(s => ({...s, isMuted: !s.isMuted}))}
         onConnect={handleConnect}
-        videoRef={videoRef}
-        canvasRef={canvasRef}
-        transcriptions={transcriptions}
+        videoRef={videoRef} canvasRef={canvasRef} transcriptions={transcriptions}
       />
     </div>
   );

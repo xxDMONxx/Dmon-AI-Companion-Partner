@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { PersonalityType, Language } from '../types';
 import { VOICES, TRANSLATIONS } from '../constants';
 
@@ -18,6 +18,8 @@ interface SettingsPanelProps {
   onVoiceChange: (v: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  memorySize?: number;
+  onClearMemory?: () => void;
 }
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ 
@@ -34,13 +36,28 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   voice, 
   onVoiceChange,
   isOpen,
-  onToggleOpen
+  onToggleOpen,
+  memorySize = 0,
+  onClearMemory
 }) => {
   const t = TRANSLATIONS[language];
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  
+  const sizeKb = (memorySize / 1024).toFixed(2);
+  const drivePercentage = Math.min(100, (memorySize / (5 * 1024 * 1024)) * 100).toFixed(2);
+
+  const handleWipeClick = () => {
+    if (!confirmWipe) {
+      setConfirmWipe(true);
+      setTimeout(() => setConfirmWipe(false), 3000); // Reset tras 3 segundos si no confirma
+    } else {
+      if (onClearMemory) onClearMemory();
+      setConfirmWipe(false);
+    }
+  };
 
   return (
     <>
-      {/* Mobile Toggle Button */}
       <button 
         onClick={onToggleOpen}
         className="md:hidden fixed top-4 right-4 z-50 p-3 bg-violet-600 rounded-full shadow-lg"
@@ -55,7 +72,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         md:relative md:translate-x-0
       `}>
-        {/* Language Toggle */}
         <div className="flex justify-between items-center mb-2">
           <span className="text-[10px] font-bold text-white/30 tracking-widest uppercase">Global Interface</span>
           <button 
@@ -64,6 +80,41 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           >
             {t.langToggle}
           </button>
+        </div>
+
+        {/* Neural Repository (Memoria) */}
+        <div className="bg-violet-950/20 border border-violet-500/20 rounded-xl p-4 shadow-[0_0_20px_rgba(139,92,246,0.05)]">
+           <div className="flex items-center justify-between mb-3">
+             <h2 className="text-violet-400 font-orbitron text-[10px] flex items-center gap-2 uppercase tracking-widest">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+                {language === 'es' ? 'Repositorio Neural' : 'Neural Repository'}
+             </h2>
+             <button 
+               onClick={handleWipeClick}
+               className={`text-[9px] px-2 py-0.5 rounded transition-all font-bold uppercase ${
+                 confirmWipe 
+                 ? 'bg-red-500 text-white animate-pulse' 
+                 : 'text-red-400/60 hover:text-red-400'
+               }`}
+             >
+               {confirmWipe 
+                 ? (language === 'es' ? '¿Confirmar?' : 'Confirm?') 
+                 : (language === 'es' ? 'Limpiar' : 'Wipe')}
+             </button>
+           </div>
+           
+           <div className="space-y-2">
+              <div className="flex justify-between text-[9px] text-white/40 uppercase tracking-tighter">
+                 <span>Sync Status (LocalStorage)</span>
+                 <span>{sizeKb} KB / 5 MB</span>
+              </div>
+              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                 <div 
+                   className="h-full bg-gradient-to-r from-violet-600 to-indigo-500 transition-all duration-1000" 
+                   style={{ width: `${drivePercentage}%` }}
+                 />
+              </div>
+           </div>
         </div>
 
         {/* User Profile */}
@@ -113,7 +164,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     : 'bg-transparent border-white/5 text-white/50 hover:border-white/20'
                 }`}
               >
-                {p}
+                {t.personalities[p]}
               </button>
             ))}
           </div>
@@ -147,7 +198,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </select>
         </div>
 
-        {/* Info */}
         <div className="mt-auto pt-4 border-t border-white/5">
           <div className="text-[9px] text-white/30 uppercase tracking-widest mb-3 font-bold">{t.protocolVersion}</div>
           <div className="p-2.5 bg-white/5 rounded-lg border border-white/5">
@@ -157,13 +207,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </div>
             <div className="flex justify-between text-[9px] text-white/40">
                <span>UI:</span>
-               <span className="text-violet-400">D-MON-PRO-V2</span>
+               <span className="text-violet-400">D-MON-MEMORY-PRO</span>
             </div>
           </div>
         </div>
       </div>
       
-      {/* Overlay for mobile */}
       {isOpen && (
         <div 
           className="fixed inset-0 bg-black/60 z-30 md:hidden"

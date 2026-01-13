@@ -7,8 +7,10 @@ import Visualizer from './Visualizer';
 interface DashboardProps {
   state: DMonState;
   volume: number;
+  userVolume: number;
   onToggleScreen: () => void;
   onToggleWebcam: () => void;
+  onSwitchCamera: () => void;
   onToggleMute: () => void;
   onConnect: () => void;
   videoRef: React.RefObject<HTMLVideoElement>;
@@ -20,8 +22,10 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ 
   state, 
   volume,
+  userVolume,
   onToggleScreen, 
   onToggleWebcam, 
+  onSwitchCamera,
   onToggleMute,
   onConnect,
   videoRef,
@@ -69,7 +73,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               {state.aiName?.toUpperCase() || 'D-MON'} <span className="text-violet-500">AI</span>
             </h1>
             <p className="text-white/40 text-[9px] md:text-xs font-light mt-1 md:mt-2 tracking-[0.2em] md:tracking-[0.3em] uppercase">
-              {state.personality} 
+              {t.personalities[state.personality]?.toUpperCase()} 
               {state.userName ? ` / LINK: ${state.userName.toUpperCase()}` : ''}
               {state.location ? ` / LOC: ACTIVA` : ''}
             </p>
@@ -136,25 +140,48 @@ const Dashboard: React.FC<DashboardProps> = ({
             <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
           </button>
           
-          <button 
-            onClick={onToggleWebcam}
-            className={`p-3 md:p-4 rounded-full transition-all ${state.isStreamingWebcam ? 'bg-violet-600 text-white' : 'hover:bg-white/5 text-white/60'}`}
-            title={t.toggleWebcam}
-          >
-            <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-          </button>
-
-          <button 
-            onClick={onToggleMute}
-            className={`p-3 md:p-4 rounded-full transition-all ${state.isMuted ? 'bg-red-500 text-white' : 'hover:bg-white/5 text-white/60'}`}
-            title={state.isMuted ? t.unmuteMic : t.muteMic}
-          >
-            {state.isMuted ? (
-              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6"></path></svg>
-            ) : (
-              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+          <div className="relative flex items-center gap-1">
+            <button 
+              onClick={onToggleWebcam}
+              className={`p-3 md:p-4 rounded-full transition-all ${state.isStreamingWebcam ? 'bg-violet-600 text-white' : 'hover:bg-white/5 text-white/60'}`}
+              title={t.toggleWebcam}
+            >
+              <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+            </button>
+            
+            {/* Switch Camera Button (Appears only if webcam is active) */}
+            {state.isStreamingWebcam && (
+              <button 
+                onClick={onSwitchCamera}
+                className="p-2 rounded-full bg-violet-800/80 hover:bg-violet-700 text-white transition-all animate-in zoom-in duration-200"
+                title={t.switchCamera}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+              </button>
             )}
-          </button>
+          </div>
+
+          <div className="relative flex items-center">
+            <button 
+              onClick={onToggleMute}
+              className={`p-3 md:p-4 rounded-full transition-all z-10 ${state.isMuted ? 'bg-red-500 text-white' : 'hover:bg-white/5 text-white/60'}`}
+              title={state.isMuted ? t.unmuteMic : t.muteMic}
+            >
+              {state.isMuted ? (
+                <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6"></path></svg>
+              ) : (
+                <svg className="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+              )}
+            </button>
+            {/* User Input Mic Indicator */}
+            {state.isConnected && !state.isMuted && (
+              <div className="absolute inset-0 rounded-full border-2 border-green-500/50 scale-100 transition-transform duration-75" style={{ 
+                transform: `scale(${1 + userVolume * 0.8})`,
+                opacity: 0.1 + userVolume * 0.9,
+                boxShadow: `0 0 ${10 + userVolume * 30}px rgba(34, 197, 94, ${0.2 + userVolume * 0.5})`
+              }}></div>
+            )}
+          </div>
 
           <div className="hidden md:block w-px h-8 bg-white/10 mx-2"></div>
 

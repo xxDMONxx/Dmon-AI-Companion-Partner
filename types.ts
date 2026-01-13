@@ -1,11 +1,11 @@
 
 export enum PersonalityType {
-  FRIENDLY = 'Friendly',
-  PROFESSIONAL = 'Professional',
-  GAMER = 'Gamer/Competitive',
-  SARCASTIC = 'Witty/Sarcastic',
-  ZEN = 'Zen/Calm',
-  CUSTOM = 'Custom Neural Persona'
+  FRIENDLY = 'FRIENDLY',
+  PROFESSIONAL = 'PROFESSIONAL',
+  GAMER = 'GAMER',
+  SARCASTIC = 'SARCASTIC',
+  ZEN = 'ZEN',
+  CUSTOM = 'CUSTOM'
 }
 
 export type Language = 'en' | 'es';
@@ -27,6 +27,7 @@ export interface DMonState {
   customPrompt: string;
   voice: string;
   currentTask: string;
+  facingMode: 'user' | 'environment';
   location?: { lat: number; lng: number };
 }
 
