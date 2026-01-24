@@ -5,6 +5,8 @@ export enum PersonalityType {
   GAMER = 'GAMER',
   SARCASTIC = 'SARCASTIC',
   ZEN = 'ZEN',
+  WHEATLEY = 'WHEATLEY',
+  GLADOS = 'GLADOS',
   CUSTOM = 'CUSTOM'
 }
 

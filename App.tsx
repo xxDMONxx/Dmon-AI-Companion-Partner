@@ -7,6 +7,7 @@ import { PersonalityType, DMonState, ActiveAlert, Language } from './types';
 import { PERSONALITY_PROMPTS, TRANSLATIONS } from './constants';
 import { createPcmBlob, decodeAudio, decodeAudioData } from './services/audioProcessing';
 
+// Variables fuera del componente para persistencia entre re-renders durante la sesión activa
 let inputAudioContext: AudioContext | null = null;
 let outputAudioContext: AudioContext | null = null;
 let nextStartTime = 0;
@@ -44,7 +45,7 @@ const App: React.FC = () => {
   const aiTextRef = useRef('');
   const userTextRef = useRef('');
   const lastActivityTimeRef = useRef<number>(Date.now());
-  const proactiveThresholdRef = useRef<number>(30000 + Math.random() * 30000);
+  const proactiveThresholdRef = useRef<number>(25000 + Math.random() * 15000);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const userAnalyserRef = useRef<AnalyserNode | null>(null);
 
@@ -54,14 +55,14 @@ const App: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
   
-  // Ref crítico para el estado de muteo (evita el problema de clausuras en onaudioprocess)
+  // Cola de promesas para asegurar que el procesamiento de audio sea secuencial y sin solapamientos
+  const audioQueueRef = useRef<Promise<void>>(Promise.resolve());
   const isMutedRef = useRef(state.isMuted);
 
   useEffect(() => {
     isMutedRef.current = state.isMuted;
   }, [state.isMuted]);
 
-  // Efecto para vincular el stream al videoRef una vez que el componente se renderiza
   useEffect(() => {
     if (videoRef.current && streamRef.current && (state.isStreamingScreen || state.isStreamingWebcam)) {
       if (videoRef.current.srcObject !== streamRef.current) {
@@ -119,15 +120,17 @@ const App: React.FC = () => {
     const interval = setInterval(() => {
       const now = Date.now();
       const quietTime = now - lastActivityTimeRef.current;
-      if (quietTime > proactiveThresholdRef.current) {
+      const audioIsPlaying = outputAudioContext && nextStartTime > outputAudioContext.currentTime;
+      
+      if (!audioIsPlaying && quietTime > proactiveThresholdRef.current) {
         lastActivityTimeRef.current = now;
-        proactiveThresholdRef.current = 35000 + Math.random() * 45000;
+        proactiveThresholdRef.current = 20000 + Math.random() * 20000;
         if (sessionRef.current) {
-          const nudgeMsg = state.language === 'es' ? "[SISTEMA: Silencio. Sé proactivo.]" : "[SYSTEM: Silence. Be proactive.]";
+          const nudgeMsg = state.language === 'es' ? "[SISTEMA: Silencio prolongado. Di algo breve según tu personalidad.]" : "[SYSTEM: Prolonged silence. Say something brief based on your personality.]";
           sessionRef.current.sendRealtimeInput({ text: nudgeMsg });
         }
       }
-    }, 5000);
+    }, 4000);
     return () => clearInterval(interval);
   }, [state.isConnected, state.language]);
 
@@ -159,6 +162,8 @@ const App: React.FC = () => {
       }
       setState(prev => ({ ...prev, isConnected: false, isStreamingScreen: false, isStreamingWebcam: false }));
       addTranscription(t.system, "Neural Link Offline.");
+      nextStartTime = 0;
+      audioQueueRef.current = Promise.resolve();
       return;
     }
     try {
@@ -169,19 +174,25 @@ const App: React.FC = () => {
       analyser.fftSize = 256;
       analyser.connect(outputAudioContext.destination);
       analyserRef.current = analyser;
+      
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const userAnalyser = inputAudioContext.createAnalyser();
       userAnalyser.fftSize = 256;
       inputAudioContext.createMediaStreamSource(micStream).connect(userAnalyser);
       userAnalyserRef.current = userAnalyser;
+      
       const persona = state.personality === PersonalityType.CUSTOM ? state.customPrompt : PERSONALITY_PROMPTS[state.personality];
       const historyCtx = transcriptions.length > 0 ? `HISTORY:\n${transcriptions.slice(-15).join('\n')}\n` : "";
+      
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
+          thinkingConfig: { thinkingBudget: 0 },
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.voice as any } } },
-          systemInstruction: `Identity: ${state.aiName}. User: ${state.userName}. ${historyCtx} Tone: ${persona}`,
+          systemInstruction: `Identity: ${state.aiName}. User: ${state.userName}. ${historyCtx} Tone: ${persona}. 
+          REAL-TIME MODE: Respond immediately. Be extremely concise. Use short sentences. 
+          Priority is LOW LATENCY and SMOOTHNESS. Do not use monologues. Avoid empty filler words.`,
           tools: [{ functionDeclarations: [{ name: 'set_timer', parameters: { type: Type.OBJECT, properties: { seconds: { type: Type.NUMBER }, label: { type: Type.STRING } }, required: ['seconds', 'label'] } }] }, { googleSearch: {} }],
           outputAudioTranscription: {},
           inputAudioTranscription: {}
@@ -190,15 +201,22 @@ const App: React.FC = () => {
           onopen: () => {
             setState(prev => ({ ...prev, isConnected: true }));
             addTranscription(t.system, "Neural Link Established.");
+            lastActivityTimeRef.current = Date.now();
+            
             const processor = inputAudioContext!.createScriptProcessor(4096, 1, 1);
             inputAudioContext!.createMediaStreamSource(micStream).connect(processor);
             
-            // USAR EL REF PARA VERIFICAR EL MUTE EN TIEMPO REAL
             processor.onaudioprocess = (e) => {
               if (!isMutedRef.current) {
+                const inputData = e.inputBuffer.getChannelData(0);
+                let hasSpeech = false;
+                // Threshold ligeramente más alto (0.06) para evitar ruidos de fondo que activen el trigger de interrupción
+                for(let i=0; i<inputData.length; i++) if(Math.abs(inputData[i]) > 0.06) { hasSpeech = true; break; }
+                if (hasSpeech) lastActivityTimeRef.current = Date.now();
+
                 sessionPromise.then(s => s.sendRealtimeInput({ 
                   media: { 
-                    data: createPcmBlob(e.inputBuffer.getChannelData(0)), 
+                    data: createPcmBlob(inputData), 
                     mimeType: 'audio/pcm;rate=16000' 
                   } 
                 }));
@@ -207,22 +225,56 @@ const App: React.FC = () => {
             processor.connect(inputAudioContext!.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
+            lastActivityTimeRef.current = Date.now();
+
             if (msg.serverContent?.outputTranscription) aiTextRef.current += msg.serverContent.outputTranscription.text;
-            if (msg.serverContent?.inputTranscription) userTextRef.current += msg.serverContent.inputTranscription.text;
+            if (msg.serverContent?.inputTranscription) {
+               userTextRef.current += msg.serverContent.inputTranscription.text;
+               lastActivityTimeRef.current = Date.now();
+            }
+            
             if (msg.serverContent?.turnComplete) {
               if (userTextRef.current) { addTranscription(t.user, userTextRef.current); userTextRef.current = ''; }
               if (aiTextRef.current) { addTranscription(state.aiName, aiTextRef.current); aiTextRef.current = ''; }
+              lastActivityTimeRef.current = Date.now();
             }
+
             const audio = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audio && outputAudioContext && analyserRef.current) {
-              const buffer = await decodeAudioData(decodeAudio(audio), outputAudioContext, 24000, 1);
-              const source = outputAudioContext.createBufferSource();
-              source.buffer = buffer; source.connect(analyserRef.current);
-              nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
-              source.start(nextStartTime); nextStartTime += buffer.duration;
-              sources.add(source); source.onended = () => sources.delete(source);
+              const audioData = decodeAudio(audio);
+              
+              audioQueueRef.current = audioQueueRef.current.then(async () => {
+                // Reanudar contexto de audio si el navegador lo suspendió
+                if (outputAudioContext!.state === 'suspended') await outputAudioContext!.resume();
+                
+                const buffer = await decodeAudioData(audioData, outputAudioContext!, 24000, 1);
+                const source = outputAudioContext!.createBufferSource();
+                source.buffer = buffer;
+                source.connect(analyserRef.current!);
+                
+                const now = outputAudioContext!.currentTime;
+                // Sincronización robusta: si el tiempo planeado ya pasó, resetear al presente
+                if (nextStartTime < now) {
+                  nextStartTime = now + 0.05; // Pequeño buffer para estabilidad
+                }
+                
+                source.start(nextStartTime);
+                nextStartTime += buffer.duration;
+                sources.add(source);
+                source.onended = () => sources.delete(source);
+                
+                lastActivityTimeRef.current = Date.now();
+              });
             }
-            if (msg.serverContent?.interrupted) { sources.forEach(s => { try{s.stop()}catch(e){} }); sources.clear(); nextStartTime = 0; }
+
+            if (msg.serverContent?.interrupted) {
+              // Limpieza inmediata en caso de interrupción del usuario
+              sources.forEach(s => { try{s.stop()}catch(e){} });
+              sources.clear();
+              nextStartTime = 0;
+              audioQueueRef.current = Promise.resolve();
+              lastActivityTimeRef.current = Date.now();
+            }
           },
           onerror: () => addTranscription(t.system, "Link Error."),
           onclose: () => setState(prev => ({ ...prev, isConnected: false }))
@@ -257,7 +309,6 @@ const App: React.FC = () => {
       
       streamRef.current = stream;
       
-      // Detener el stream si el usuario cancela el diálogo nativo de compartir pantalla
       stream.getVideoTracks()[0].onended = () => {
         if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
         setState(p => ({ ...p, isStreamingScreen: false, isStreamingWebcam: false }));
